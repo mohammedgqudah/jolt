@@ -5,50 +5,9 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // *******
-    // build ebpf and generate skeleton
-
-    // zig fmt: off
-    const dump_vmlinux_run = b.addSystemCommand(&(.{"bpftool"} ++ .{
-        "btf", "dump", "file",
-        "/sys/kernel/btf/vmlinux",
-        "format", "c",
-    }));
-
-    const clang_run = b.addSystemCommand(&(.{"clang"} ++ .{
-        "-g", "-O2",
-        "-target", "bpf",
-        "-o",  "zig-out/prog.bpf.o",
-        "-c","src/prog.bpf.c",
-        "-I", "zig-out/headers"
-    }));
-    // zig fmt: on
-
-    // 1. capture vmlinux.h
-    const vmlinux_output = dump_vmlinux_run.captureStdOut(.{});
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(
-        vmlinux_output,
-        .prefix,
-        "headers/vmlinux.h",
-    ).step);
-
-    // 2. compile prog.bpf.c
-    const bpf_o_step = b.step("compile-bpf", "Compile the eBPF program");
-    bpf_o_step.dependOn(&clang_run.step);
-    b.getInstallStep().dependOn(bpf_o_step);
-
-    // 3. generate skeleton
-    // bpftool gen skeleton $< > $@
-    const gen_skel_run = b.addSystemCommand(&(.{"bpftool"} ++ .{
-        "gen",                "skeleton",
-        "zig-out/prog.bpf.o",
-    }));
-    const skeleton_output = gen_skel_run.captureStdOut(.{});
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(
-        skeleton_output,
-        .prefix,
-        "headers/prog.skel.h",
-    ).step);
-    // /build
+    // ebpf build system
+    dump_vmlinux(b);
+    compile_bpf(b);
     // *******
 
     const mod = b.addModule("jolt", .{
@@ -106,4 +65,52 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+}
+
+/// Install vmlinux.h
+fn dump_vmlinux(b: *std.Build) void {
+    // zig fmt: off
+    const dump_vmlinux_run = b.addSystemCommand(&(.{"bpftool"} ++ .{
+        "btf", "dump", "file",
+        "/sys/kernel/btf/vmlinux",
+        "format", "c",
+    }));
+    // zig fmt: on
+
+    const vmlinux_output = dump_vmlinux_run.captureStdOut(.{});
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+        vmlinux_output,
+        .prefix,
+        "headers/vmlinux.h",
+    ).step);
+}
+
+fn compile_bpf(b: *std.Build) void {
+    // zig fmt: off
+    const clang_run = b.addSystemCommand(&(.{"clang"} ++ .{
+        "-g", "-O2",
+        "-target", "bpf",
+        "-o",  "zig-out/prog.bpf.o",
+        "-c","src/prog.bpf.c",
+        "-I", "zig-out/headers"
+    }));
+    // zig fmt: on
+    const bpf_o_step = b.step("compile-bpf", "Compile the eBPF program");
+    bpf_o_step.dependOn(&clang_run.step);
+    b.getInstallStep().dependOn(bpf_o_step);
+
+    generate_skeleton(b);
+}
+
+fn generate_skeleton(b: *std.Build) void {
+    const gen_skel_run = b.addSystemCommand(&(.{"bpftool"} ++ .{
+        "gen",                "skeleton",
+        "zig-out/prog.bpf.o",
+    }));
+    const skeleton_output = gen_skel_run.captureStdOut(.{});
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+        skeleton_output,
+        .prefix,
+        "headers/prog.skel.h",
+    ).step);
 }

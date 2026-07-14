@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
     // ebpf build system
     dump_vmlinux(b);
     compile_bpf(b);
+    compile_commands_json(b);
     // *******
 
     const mod = b.addModule("jolt", .{
@@ -113,4 +114,21 @@ fn generate_skeleton(b: *std.Build) void {
         .prefix,
         "headers/prog.skel.h",
     ).step);
+}
+
+fn compile_commands_json(b: *std.Build) void {
+    const cc_json = b.step("compile_commands", "Generate compile_commands.json");
+    const gen = b.addWriteFiles();
+    const entries = std.fmt.allocPrint(b.allocator,
+        \\[
+        \\  {{
+        \\    "directory": "{f}",
+        \\    "file": "src/prog.bpf.c",
+        \\    "arguments": ["clang", "-Izig-out/headers", "-c", "src/prog.bpf.c", "-o", "zig-out/prog.bpf.o"]
+        \\  }}
+        \\]
+    , .{b.root}) catch @panic("OOM");
+    const file = gen.add("compile_commands.json", entries);
+    cc_json.dependOn(&b.addInstallFileWithDir(file, .{ .custom = "../" }, "compile_commands.json").step);
+    b.getInstallStep().dependOn(cc_json);
 }

@@ -6,6 +6,7 @@ const Thread = std.Thread;
 
 const print = std.debug.print;
 
+var ready_ports: usize = 0;
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const gpa = init.gpa;
@@ -16,7 +17,7 @@ pub fn main(init: std.process.Init) !void {
     _ = gpa;
 
     const node_args = args[1..];
-    const ports = try arena.alloc(u16, node_args.len);
+    var ports = try arena.alloc(u16, node_args.len);
     for (node_args, 0..) |arg, i| {
         ports[i] = try std.fmt.parseInt(u16, arg, 10);
     }
@@ -30,22 +31,29 @@ pub fn main(init: std.process.Init) !void {
 
     try dummy.attach();
 
-    var rb: bpf.RingBuffer = try .init(dummy.maps.events_buf, handle_event);
+    var rb: bpf.RingBuffer = try .init(dummy.maps.events_buf, handle_event, @ptrCast(&ports));
 
-    while (true) {
+    print("waiting for ports\n", .{});
+    while (ready_ports < ports.len) {
         _ = try rb.poll_once(.fromSeconds(1));
     }
+    print("done\n", .{});
 }
 
 fn handle_event(ctx: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) c_int {
-    _ = ctx;
     _ = size;
 
     const event: *const c.bind_event = @ptrCast(@alignCast(data.?));
+    const port = mem.bigToNative(u16, event.port);
 
-    std.debug.print("[pid={d}] bind on port {d}\n", .{
-        event.pid,
-        mem.bigToNative(u16, event.port),
-    });
+    const _ports: *[]u16 = @ptrCast(@alignCast(ctx.?));
+    const ports: []u16 = _ports.*;
+
+    for (ports) |p| {
+        if (p == port) {
+            ready_ports += 1;
+        }
+    }
+
     return 0;
 }

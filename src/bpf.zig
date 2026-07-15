@@ -173,11 +173,12 @@ pub const RingBuffer = struct {
     pub fn init(
         map: *c.bpf_map,
         handler: *const fn (?*anyopaque, ?*anyopaque, usize) callconv(.c) c_int,
+        context: ?*anyopaque,
     ) !Self {
         const rb = c.ring_buffer__new(
             c.bpf_map__fd(map),
             handler,
-            null,
+            context,
             null,
         );
         if (rb) |r| {

@@ -6,8 +6,8 @@ pub fn build(b: *std.Build) void {
 
     // *******
     // ebpf build system
-    dump_vmlinux(b);
-    compile_bpf(b);
+    const vmlinux_step = dump_vmlinux(b);
+    const bpf_step = compile_bpf(b, vmlinux_step);
     compile_commands_json(b);
     // *******
 
@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
         .link_libc = true,
     });
+    translate_c.step.dependOn(vmlinux_step);
 
     translate_c.addIncludePath(b.path("zig-out/headers"));
     const translate_c_module = translate_c.createModule();
@@ -41,6 +42,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.linkSystemLibrary("bpf", .{ .needed = true });
+
+    exe.step.dependOn(bpf_step);
 
     b.installArtifact(exe);
 
@@ -71,7 +74,7 @@ pub fn build(b: *std.Build) void {
 }
 
 /// Install vmlinux.h
-fn dump_vmlinux(b: *std.Build) void {
+fn dump_vmlinux(b: *std.Build) *std.Build.Step {
     // zig fmt: off
     const dump_vmlinux_run = b.addSystemCommand(&(.{"bpftool"} ++ .{
         "btf", "dump", "file",
@@ -81,14 +84,18 @@ fn dump_vmlinux(b: *std.Build) void {
     // zig fmt: on
 
     const vmlinux_output = dump_vmlinux_run.captureStdOut(.{});
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+    const install_header = b.addInstallFileWithDir(
         vmlinux_output,
         .prefix,
         "headers/vmlinux.h",
-    ).step);
+    );
+
+    b.getInstallStep().dependOn(&install_header.step);
+
+    return &install_header.step;
 }
 
-fn compile_bpf(b: *std.Build) void {
+fn compile_bpf(b: *std.Build, vmlinux_step: *std.Build.Step) *std.Build.Step {
     // zig fmt: off
     const clang_run = b.addSystemCommand(&(.{"clang"} ++ .{
         "-g", "-O2",
@@ -102,9 +109,13 @@ fn compile_bpf(b: *std.Build) void {
         "-I", "zig-out/headers"
     }));
     // zig fmt: on
+    clang_run.step.dependOn(vmlinux_step);
+
     const bpf_o_step = b.step("compile-bpf", "Compile the eBPF program");
     bpf_o_step.dependOn(&clang_run.step);
     b.getInstallStep().dependOn(bpf_o_step);
+
+    return bpf_o_step;
 }
 
 fn compile_commands_json(b: *std.Build) void {

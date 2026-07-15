@@ -5,7 +5,7 @@ hooks:
 
 .PHONY: dev
 dev:
-	watchexec -e zig -- "clear && zig build"
+	watchexec -e zig -e h -e c -- "clear && zig build"
 
 .PHONY: install
 install:

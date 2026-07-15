@@ -93,6 +93,7 @@ fn compile_bpf(b: *std.Build) void {
     const clang_run = b.addSystemCommand(&(.{"clang"} ++ .{
         "-g", "-O2",
         "-target", "bpf",
+        "-D", "__TARGET_ARCH_x86",
         // instead of saving in zig-out, i had to save in src
         // so that i can @embedFile, which refused to embed files
         // outside src/ :(

@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
 
     var dummy: *bpf.Object(
         "prog.bpf.o",
-        &.{"inet_bind_exit"},
+        &.{ "inet_bind_exit", "inet_listen_stop" },
         &.{"events_buf"},
     ) = try .init(std.heap.c_allocator);
     defer dummy.deinit(std.heap.c_allocator);
@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
     var rb: bpf.RingBuffer = try .init(dummy.maps.events_buf, handle_event, @ptrCast(&ports));
 
     print("waiting for ports\n", .{});
-    while (ready_ports < ports.len) {
+    while (true) {
         _ = try rb.poll_once(.fromSeconds(1));
     }
     print("done\n", .{});
@@ -44,16 +44,15 @@ fn handle_event(ctx: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) c
     _ = size;
 
     const event: *const c.bind_event = @ptrCast(@alignCast(data.?));
-    const port = mem.bigToNative(u16, event.port);
+
+    print("{d} {s}\n", .{
+        event.port,
+        if (event.is_release == 1) "stopped" else "listening",
+    });
 
     const _ports: *[]u16 = @ptrCast(@alignCast(ctx.?));
     const ports: []u16 = _ports.*;
-
-    for (ports) |p| {
-        if (p == port) {
-            ready_ports += 1;
-        }
-    }
+    _ = ports;
 
     return 0;
 }

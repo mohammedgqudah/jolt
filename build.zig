@@ -33,12 +33,14 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
             .imports = &.{
                 .{ .name = "jolt", .module = mod },
                 .{ .name = "c", .module = translate_c_module },
             },
         }),
     });
+    exe.root_module.linkSystemLibrary("bpf", .{ .needed = true });
 
     b.installArtifact(exe);
 
@@ -91,7 +93,10 @@ fn compile_bpf(b: *std.Build) void {
     const clang_run = b.addSystemCommand(&(.{"clang"} ++ .{
         "-g", "-O2",
         "-target", "bpf",
-        "-o",  "zig-out/prog.bpf.o",
+        // instead of saving in zig-out, i had to save in src
+        // so that i can @embedFile, which refused to embed files
+        // outside src/ :(
+        "-o",  "src/prog.bpf.o",
         "-c","src/prog.bpf.c",
         "-I", "zig-out/headers"
     }));
@@ -99,21 +104,6 @@ fn compile_bpf(b: *std.Build) void {
     const bpf_o_step = b.step("compile-bpf", "Compile the eBPF program");
     bpf_o_step.dependOn(&clang_run.step);
     b.getInstallStep().dependOn(bpf_o_step);
-
-    generate_skeleton(b);
-}
-
-fn generate_skeleton(b: *std.Build) void {
-    const gen_skel_run = b.addSystemCommand(&(.{"bpftool"} ++ .{
-        "gen",                "skeleton",
-        "zig-out/prog.bpf.o",
-    }));
-    const skeleton_output = gen_skel_run.captureStdOut(.{});
-    b.getInstallStep().dependOn(&b.addInstallFileWithDir(
-        skeleton_output,
-        .prefix,
-        "headers/prog.skel.h",
-    ).step);
 }
 
 fn compile_commands_json(b: *std.Build) void {

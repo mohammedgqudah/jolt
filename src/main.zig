@@ -1,4 +1,6 @@
 const std = @import("std");
+const bpf = @import("bpf.zig");
+const c = @import("c");
 const mem = std.mem;
 const Thread = std.Thread;
 
@@ -18,4 +20,9 @@ pub fn main(init: std.process.Init) !void {
     for (node_args, 0..) |arg, i| {
         ports[i] = try std.fmt.parseInt(u16, arg, 10);
     }
+    var dummy: *bpf.Object("prog.bpf.o", &.{"block_wx_mprotect"}) = try .init(std.heap.c_allocator);
+    defer dummy.deinit(std.heap.c_allocator);
+
+    try dummy.attach();
+    //try std.Io.sleep(init.io, .fromSeconds(20), .awake);
 }

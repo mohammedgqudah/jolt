@@ -45,7 +45,9 @@ fn handle_event(ctx: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) c
 
     const event: *const c.bind_event = @ptrCast(@alignCast(data.?));
 
-    print("{d} {s}\n", .{
+    print("{d}/{d} - {d} {s}\n", .{
+        event.ns_cookie,
+        event.cookie,
         event.port,
         if (event.is_release == 1) "stopped" else "listening",
     });

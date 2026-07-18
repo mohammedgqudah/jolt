@@ -9,6 +9,13 @@ const print = std.debug.print;
 
 var ready_ports: usize = 0;
 
+var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+
+fn sigintHandler(sig: std.posix.SIG) callconv(.c) void {
+    _ = sig;
+    running.store(false, .monotonic);
+}
+
 /// Returns the cookie for the current network namespace (netns).
 ///
 /// A cookie uniquely identifies a netns.
@@ -64,6 +71,14 @@ const Context = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    // handle ctrl-c (SIGINT)
+    var act = std.posix.Sigaction{
+        .handler = .{ .handler = sigintHandler },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.INT, &act, null);
+
     const arena = init.arena.allocator();
     const gpa = init.gpa;
     const io = init.io;
@@ -87,7 +102,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try tc.init(io);
-    defer tc.deinit() catch {};
+    defer tc.deinit(io) catch {};
 
     // This context object will be passed to ebpf hooks.
     // to be more specific, that will be passed to functions that handle new events
@@ -108,7 +123,7 @@ pub fn main(init: std.process.Init) !void {
     var rb: bpf.RingBuffer = try .init(dummy.maps.events_buf, handle_event, @ptrCast(&ctx));
 
     print("waiting for ports\n", .{});
-    while (true) {
+    while (running.load(.monotonic)) {
         _ = try rb.poll_once(.fromSeconds(1));
     }
     print("done\n", .{});

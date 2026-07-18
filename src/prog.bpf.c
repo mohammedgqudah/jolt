@@ -87,11 +87,9 @@ static __always_inline struct tcphdr *parse_tcp(struct __sk_buff *skb) {
  * A BPF_PROG_TYPE_SCHED_ACT program.
  *
  * This program will not be loaded by "jolt" directly, instead, it will
- * be loaded via "tc", this is why the section name starts with "?", which is understood
- * by libbpf to not auto-load it.
- * https://github.com/libbpf/libbpf/blob/v1.7.0/src/libbpf.c#L862-L872
+ * be loaded via "tc".
  */
-SEC("?action/dyn_delay")
+SEC("action/dyn_delay")
 int tc_dyn_delay(struct __sk_buff *skb) {
   struct tcphdr *tcp = parse_tcp(skb);
   if (tcp == NULL)

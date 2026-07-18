@@ -135,7 +135,34 @@ pub fn Object(comptime path: []const u8, comptime programs: []const [:0]const u8
             }
         }
 
+        fn should_autoload(
+            name: [*:0]const u8,
+        ) bool {
+            inline for (programs) |p| {
+                if (std.mem.eql(u8, std.mem.span(name), p))
+                    return true;
+            }
+            return false;
+        }
+
         fn load(self: *Self) !void {
+            // only load programs specified in the programs array.
+            // libbpf automatically auto-loads all programs
+            // so we need to opt-out. 
+            //
+            // note: libbpf supports disabling auto-load by prefixing the section
+            // in the bpf program with a "?", but that did not play well with "tc".
+            // see: https://github.com/libbpf/libbpf/blob/v1.7.0/src/libbpf.c#L862-L872
+            var prog = c.bpf_object__next_program(self.object, null);
+            while (prog != null) {
+                const name = c.bpf_program__name(prog);
+
+                if (!should_autoload(name)) {
+                    _ = c.bpf_program__set_autoload(prog, false);
+                }
+                prog = c.bpf_object__next_program(self.object, prog);
+            }
+
             const rc = c.bpf_object__load_skeleton(self.skeleton);
             switch (std.posix.errno(rc)) {
                 .SUCCESS => {},

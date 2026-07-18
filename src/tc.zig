@@ -32,7 +32,7 @@ pub fn init(io: Io) TcError!void {
             "qdisc",   "add",
             "dev",     "lo",
             // root qdisc of type prio
-            "root",    "prio",
+            "root", "handle", "1:", "prio",
             // prio params, see tc-prio(8)
             //
             // 2 bands, one for normal traffic
@@ -50,6 +50,78 @@ pub fn init(io: Io) TcError!void {
     // zig fmt: on
     const attach_term = try attach_qdisc_cmd.wait(io);
     if (!attach_term.success()) return TcError.FailedToAttachQdisc;
+
+    try setup_bands(io);
 }
 
-pub fn deinit() !void {}
+/// Attach a qdisc for each band created in init.
+fn setup_bands(io: Io) !void {
+    // band1 is the "unshaped" band
+    var band1_child = try std.process.spawn(io, .{
+        .argv = &(.{"tc"} ++ .{
+            "qdisc",    "add",
+            "dev",      "lo",
+            // major:minor
+            // major -> major of parent (the prio qdisc as defined in init 1:)
+            // minor -> band number
+            "parent",   "1:1",
+            "fq_codel",
+        }),
+        .stdout = .ignore,
+        .stderr = .inherit,
+    });
+    const band1_term = try band1_child.wait(io);
+    if (!band1_term.success()) return TcError.FailedToAttachQdisc;
+
+    // band2 is for delayed traffic, an eBPF program will be attached
+    // shortly to determine which packets go into this band.
+    var band2_child = try std.process.spawn(io, .{
+        // zig fmt: off
+        .argv = &(.{"tc"} ++ .{
+            "qdisc",  "add",
+            "dev",    "lo",
+            "parent", "1:2",
+            "netem",
+            "delay", "1000ms",
+        }),
+        // zig fmt: on
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    const band2_term = try band2_child.wait(io);
+    if (!band2_term.success()) return TcError.FailedToAttachQdisc;
+
+    // attach a bpf filter to band2
+    var load_bpf_child = try std.process.spawn(io, .{
+        .argv = &(.{"tc"} ++ .{
+            // zig fmt: off
+            "filter",  "add",
+            "dev",    "lo",
+            "parent", "1:",
+            // TODO: use the embedded eBPF object
+            "bpf", "obj", "./src/prog.bpf.o",
+            "sec", "action/dyn_delay",
+            // on band2
+            "flowid", "1:2",
+            // direct-action
+            "da"
+            // zig fmt: on
+        }),
+        .stdout = .ignore,
+        .stderr = .inherit,
+    });
+    const load_bpf_term = try load_bpf_child.wait(io);
+    if (!load_bpf_term.success()) return TcError.FailedToAttachQdisc;
+}
+pub fn deinit(io: Io) !void {
+    var del_qdisc_child = try std.process.spawn(io, .{
+        .argv = &(.{"tc"} ++ .{
+            "qdisc", "del",
+            "dev",   "lo",
+            "root",
+        }),
+        .stdout = .ignore,
+        .stderr = .inherit,
+    });
+    _ = try del_qdisc_child.wait(io);
+}

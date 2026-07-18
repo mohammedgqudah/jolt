@@ -71,6 +71,10 @@ pub fn main(init: std.process.Init) !void {
     _ = io;
     _ = gpa;
 
+    // The ports you provide as arguments are the ports your local services
+    // will bind to and listen for connections at. "jolt" will then monitor
+    // incoming connections to your services and let delay or drop traffic for
+    // any connection (or all connections).
     const node_args = args[1..];
     var ports = try arena.alloc(Port, node_args.len);
     for (node_args, 0..) |arg, i| {
@@ -82,6 +86,9 @@ pub fn main(init: std.process.Init) !void {
         };
     }
 
+    // This context object will be passed to ebpf hooks.
+    // to be more specific, that will be passed to functions that handle new events
+    // from eBPF ring buffer maps.
     var ctx: Context = .{
         .ports = ports,
     };

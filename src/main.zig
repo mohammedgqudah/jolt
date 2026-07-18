@@ -1,5 +1,6 @@
 const std = @import("std");
 const bpf = @import("bpf.zig");
+const tc = @import("tc.zig");
 const c = @import("c");
 const mem = std.mem;
 const Thread = std.Thread;
@@ -68,7 +69,6 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const args = try init.minimal.args.toSlice(arena);
 
-    _ = io;
     _ = gpa;
 
     // The ports you provide as arguments are the ports your local services
@@ -85,6 +85,9 @@ pub fn main(init: std.process.Init) !void {
             .netns_cookie = try getCurrentNetNsCookie(),
         };
     }
+
+    try tc.init(io);
+    defer tc.deinit() catch {};
 
     // This context object will be passed to ebpf hooks.
     // to be more specific, that will be passed to functions that handle new events

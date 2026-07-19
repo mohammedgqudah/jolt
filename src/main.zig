@@ -76,7 +76,7 @@ const Port = struct {
         unknown,
     },
     /// Connections made to/from this port.
-    connections: std.ArrayListUnmanaged(Connection),
+    connections: std.ArrayList(Connection),
 };
 
 const Context = struct {

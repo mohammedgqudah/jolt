@@ -47,6 +47,15 @@ pub fn getCurrentNetNsCookie() !u64 {
     return cookie;
 }
 
+/// A connection associated with a monitored port.
+/// Only tracks local connections.
+const Endpoint = struct {
+    /// The local port for client
+    peer_port: u16,
+    /// The client PID
+    pid: u32,
+};
+
 const Port = struct {
     number: u16,
     netns_cookie: u64,
@@ -63,11 +72,14 @@ const Port = struct {
         /// is bound to this port or not.
         unknown,
     },
+    /// Connections made to this port.
+    connections: std.ArrayList(Endpoint),
 };
 
 const Context = struct {
     /// ports we're interested in
     ports: []Port,
+    allocator: std.mem.Allocator,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -98,6 +110,7 @@ pub fn main(init: std.process.Init) !void {
             .state = .unknown,
             // only support current ns for now
             .netns_cookie = try getCurrentNetNsCookie(),
+            .connections = .empty,
         };
     }
 
@@ -109,11 +122,17 @@ pub fn main(init: std.process.Init) !void {
     // from eBPF ring buffer maps.
     var ctx: Context = .{
         .ports = ports,
+        .allocator = arena,
     };
 
     var dummy: *bpf.Object(
         "prog.bpf.o",
-        &.{ "inet_bind_exit", "inet_listen_stop" },
+        &.{
+            "inet_bind_exit",
+            "inet_listen_stop",
+            "inet_csk_accept_exit",
+            "tcp_v4_connect_exit",
+        },
         &.{"events_buf"},
     ) = try .init(std.heap.c_allocator);
     defer dummy.deinit(std.heap.c_allocator);
@@ -136,27 +155,56 @@ pub fn main(init: std.process.Init) !void {
 fn handle_event(_ctx: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) c_int {
     _ = size;
 
-    const event: *const c.bind_event = @ptrCast(@alignCast(data.?));
-
-    print("{d}/{d} - {d} {s}\n", .{
-        event.ns_cookie,
-        event.cookie,
-        event.port,
-        if (event.is_release == 1) "stopped" else "listening",
-    });
-
     const ctx: *Context = @ptrCast(@alignCast(_ctx.?));
+    const event: *const c.jolt_event = @ptrCast(@alignCast(data.?));
 
-    for (ctx.ports) |*port| {
-        if (port.netns_cookie == event.ns_cookie and port.number == event.port) {
-            if (event.is_release == 0) {
-                // bind
-                port.state = .{ .active = .{ .socket_cookie = event.cookie, .pid = event.pid } };
-            } else {
-                // close
-                port.state = .inactive;
+    switch (event.tag) {
+        c.EVENT_BIND, c.EVENT_RELEASE => {
+            const socket = event.data.socket;
+            const is_bind = event.tag == c.EVENT_BIND;
+
+            print("{d}/{d} - {d} {s}\n", .{
+                socket.ns_cookie,
+                socket.cookie,
+                socket.port,
+                if (is_bind) "bound" else "closed",
+            });
+
+            for (ctx.ports) |*port| {
+                if (port.netns_cookie == socket.ns_cookie and port.number == socket.port) {
+                    if (is_bind) {
+                        port.state = .{ .active = .{ .socket_cookie = socket.cookie, .pid = event.pid } };
+                    } else {
+                        port.state = .inactive;
+                        port.connections.clearRetainingCapacity();
+                    }
+                }
             }
-        }
+        },
+        c.EVENT_ACCEPT => {
+            const accept = event.data.accept;
+            print("accept on port {d}: new connection from client port {d} (pid={d})\n", .{
+                accept.listening.port,
+                accept.peer_port,
+                accept.client_pid,
+            });
+
+            for (ctx.ports) |*port| {
+                if (port.netns_cookie == accept.listening.ns_cookie and
+                    port.number == accept.listening.port)
+                {
+                    port.connections.append(ctx.allocator, .{
+                        .peer_port = accept.peer_port,
+                        .pid = accept.client_pid,
+                    }) catch {};
+                    print("port {d} has {d} connections\n", .{
+                        port.number,
+                        port.connections.items.len,
+                    });
+                }
+            }
+        },
+        else => unreachable,
     }
 
     return 0;

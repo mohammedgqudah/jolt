@@ -106,7 +106,7 @@ pub fn Object(comptime path: []const u8, comptime programs: []const [:0]const u8
             //  with libbpf/bpftool.
             self.skeleton.map_cnt = maps.len;
             // TODO: see https://github.com/libbpf/bpftool/blob/3468e85806337c8308e1e7e8da30e343582e1aae/src/gen.c#L912
-            self.skeleton.map_skel_sz = 24;
+            self.skeleton.map_skel_sz = @sizeOf(c.bpf_map_skeleton);
 
             const skeleton_maps = try allocator.alloc(c.bpf_map_skeleton, maps.len);
             @memset(skeleton_maps, std.mem.zeroes(c.bpf_map_skeleton));

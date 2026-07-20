@@ -27,6 +27,42 @@ struct {
   __uint(max_entries, 1024);
 } events_buf SEC(".maps");
 
+/*
+ * Store the client PID from tcp_v4_connect to the accept event.
+ */
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, 1024);
+  __type(key, struct endpoint_id);
+  __type(value, u32); /* pid */
+} connect_pid SEC(".maps");
+
+enum sk_endpoint_side { SK_LOCAL, SK_PEER };
+/* Get an identifier for an endpoint.
+ *
+ * @param[out]  conn_id   result is stored here.
+ * @param[in]   sk        sock.
+ * @param[in]   do_swap   whether to swap src and dest fields or not. Useful for
+ *                        getting the endpoint id of the peer endpoint
+ *                        (e.g. in accept(2)).
+ * */
+static __always_inline void sk_endpoint_id(struct endpoint_id *key, struct sock *sk, enum sk_endpoint_side side) {
+  struct net *net = BPF_CORE_READ(sk, __sk_common.skc_net.net);
+
+  __u16 src_port = BPF_CORE_READ(sk, __sk_common.skc_num);
+  __u16 dst_port = bpf_ntohs(BPF_CORE_READ(sk, __sk_common.skc_dport));
+  __be32 src_addr = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+  __be32 dst_addr = BPF_CORE_READ(sk, __sk_common.skc_daddr);
+  
+  int do_swap = side == SK_LOCAL ? 0 : 1;
+
+  *key = (struct endpoint_id){
+      .port = do_swap ? dst_port : src_port,
+      .addr = do_swap ? dst_addr : src_addr,
+      .ns_cookie = BPF_CORE_READ(net, net_cookie),
+  };
+}
+
 SEC("fexit/inet_bind")
 int BPF_PROG(inet_bind_exit, struct socket *sock, struct sockaddr *uaddr,
              int addr_len, int ret) {
@@ -36,14 +72,83 @@ int BPF_PROG(inet_bind_exit, struct socket *sock, struct sockaddr *uaddr,
   struct sock *sk = BPF_CORE_READ(sock, sk);
   struct net *net = BPF_CORE_READ(sk, __sk_common.skc_net.net);
 
-  struct bind_event event = {
+  struct jolt_event event = {
       .pid = (u32)(bpf_get_current_pid_tgid() >> 32),
-      .port = bpf_ntohs(((struct sockaddr_in *)uaddr)->sin_port),
-      .is_release = false,
-      .cookie = bpf_get_socket_cookie(sock->sk),
-      .ns_cookie = BPF_CORE_READ(net, net_cookie),
+      .tag = EVENT_BIND,
+      .data =
+          {
+              .socket =
+                  {
+                      .port =
+                          bpf_ntohs(((struct sockaddr_in *)uaddr)->sin_port),
+                      .cookie = bpf_get_socket_cookie(sock->sk),
+                      .ns_cookie = BPF_CORE_READ(net, net_cookie),
+                  },
+          },
   };
   bpf_ringbuf_output(&events_buf, &event, sizeof(event), 0);
+  return 0;
+}
+
+SEC("fexit/inet_csk_accept")
+int BPF_PROG(inet_csk_accept_exit, struct sock *sk, int flags,
+             struct sock *child_sk) {
+  if (!child_sk)
+    return 0;
+
+  struct net *net = BPF_CORE_READ(sk, __sk_common.skc_net.net);
+
+  __u16 server_port = BPF_CORE_READ(sk, __sk_common.skc_num);
+
+  /* Look up the client PID that was stored by tcp_v4_connect. */
+  struct endpoint_id map_key;
+  sk_endpoint_id(&map_key, child_sk, SK_PEER);
+  u32 *client_pid = bpf_map_lookup_elem(&connect_pid, &map_key);
+
+  if (client_pid == NULL)
+    return 0; /* this connection didn't originate from this machine, ignore
+               */
+
+  struct jolt_event event = {
+      .pid = (u32)(bpf_get_current_pid_tgid() >> 32),
+      .tag = EVENT_ACCEPT,
+      .data.accept =
+          {
+              .listening =
+                  {
+                      .port = server_port,
+                      .cookie =
+                          BPF_CORE_READ(sk, __sk_common.skc_cookie).counter,
+                      .ns_cookie = BPF_CORE_READ(net, net_cookie),
+                  },
+              .peer_port = map_key.port,
+              .client_pid = *client_pid,
+          },
+  };
+
+  bpf_ringbuf_output(&events_buf, &event, sizeof(event), 0);
+
+  if (client_pid)
+    bpf_map_delete_elem(&connect_pid, &map_key);
+  return 0;
+}
+
+/*
+ * This only records the PID for the process starting the connection.
+ * */
+SEC("fexit/tcp_v4_connect")
+int BPF_PROG(tcp_v4_connect_exit, struct sock *sk, struct sockaddr *uaddr,
+             int addr_len, int ret) {
+  if (ret < 0)
+    return 0;
+
+  struct endpoint_id key;
+  sk_endpoint_id(&key, sk, SK_LOCAL);
+
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+
+  bpf_map_update_elem(&connect_pid, &key, &pid, BPF_ANY);
   return 0;
 }
 
@@ -51,13 +156,17 @@ SEC("kprobe/inet_csk_listen_stop")
 int BPF_KPROBE(inet_listen_stop, struct sock *sock) {
   struct net *net = BPF_CORE_READ(sock, __sk_common.skc_net.net);
 
-  struct bind_event event = {
+  struct jolt_event event = {
       .pid = (u32)(bpf_get_current_pid_tgid() >> 32),
-      .is_release = true,
-      .port = BPF_CORE_READ(sock, __sk_common.skc_num),
-      .cookie = BPF_CORE_READ(sock, __sk_common.skc_cookie).counter,
-      .ns_cookie = BPF_CORE_READ(net, net_cookie),
-  };
+      .tag = EVENT_RELEASE,
+      .data = {
+          .socket =
+              {
+                  .port = BPF_CORE_READ(sock, __sk_common.skc_num),
+                  .cookie = BPF_CORE_READ(sock, __sk_common.skc_cookie).counter,
+                  .ns_cookie = BPF_CORE_READ(net, net_cookie),
+              },
+      }};
   bpf_ringbuf_output(&events_buf, &event, sizeof(event), 0);
   return 0;
 }

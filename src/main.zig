@@ -79,7 +79,6 @@ const Port = struct {
 const Context = struct {
     /// ports we're interested in
     ports: []Port,
-    /// Allocator for dynamic data (connections).
     allocator: std.mem.Allocator,
 };
 
@@ -134,7 +133,7 @@ pub fn main(init: std.process.Init) !void {
             "inet_csk_accept_exit",
             "tcp_v4_connect_exit",
         },
-        &.{ "events_buf", "connect_pid" },
+        &.{"events_buf"},
     ) = try .init(std.heap.c_allocator);
     defer dummy.deinit(std.heap.c_allocator);
 

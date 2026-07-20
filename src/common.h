@@ -1,7 +1,7 @@
 typedef enum {
   // a socket was bound to a port
   EVENT_BIND,
-  // a socket was released
+  // a listening socket was released
   EVENT_RELEASE,
   // a connection was accepted
   EVENT_ACCEPT,

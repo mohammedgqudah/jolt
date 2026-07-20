@@ -1,4 +1,16 @@
 # what's this
 I'm building something similar to [toxiproxy](https://github.com/Shopify/toxiproxy) but in eBPF.
 
-right now my focus is on writing a thin wrapper around libbpf, check [bpf.zig](https://github.com/mohammedgqudah/jolt/blob/main/src/bpf.zig) and [this example](https://github.com/mohammedgqudah/jolt/blob/main/src/main.zig#L24-L37)
+## Basic Usage
+```shell
+$ sudo jolt 8000 8001 8003
+waiting for ports...
+port 8000: new connection from client port 53996 (pid=213992)
+```
+
+## Roadmap
+- [x] build a thin wrapper around libbpf, [bpf.zig](https://github.com/mohammedgqudah/jolt/blob/main/src/bpf.zig)
+- [x] delay packets using tc with a bpf filter
+- [x] track local connections
+- [ ] a tc qdisc implementation in eBPF https://github.com/mohammedgqudah/jolt/issues/2
+- [ ] a minimal inline tui (low priority)

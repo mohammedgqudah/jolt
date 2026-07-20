@@ -5,8 +5,6 @@ typedef enum {
   EVENT_RELEASE,
   // a connection was accepted
   EVENT_ACCEPT,
-  // a socket was connected
-  EVENT_CONNECT,
 } EventTag;
 
 struct sock_evt {
@@ -26,11 +24,6 @@ struct jolt_event {
       uint16_t peer_port;        /* local port of the connecting socket */
       uint32_t client_pid;       /* PID of the connecting client */
     } accept;                    /* a connection was accepted */
-
-    struct {
-      struct sock_evt socket; /* socket connecting */
-      uint16_t rport;
-    } connect; /* socket attempting to connect */
   } data;
 };
 

@@ -48,15 +48,12 @@ pub fn getCurrentNetNsCookie() !u64 {
 }
 
 /// A connection associated with a monitored port.
-const Connection = struct {
-    /// For ACCEPT: the child socket's local port.
-    /// For CONNECT: the remote port being connected to.
+/// Only tracks local connections.
+const Endpoint = struct {
+    /// The local port for client
     peer_port: u16,
-    /// The socket cookie of the connected socket (child for accept, originator for connect).
-    socket_cookie: u64,
-    /// For ACCEPT: the listening socket cookie (same as Port.socket_cookie).
-    /// For CONNECT: null.
-    listen_cookie: ?u64,
+    /// The client PID
+    pid: u32,
 };
 
 const Port = struct {
@@ -75,8 +72,8 @@ const Port = struct {
         /// is bound to this port or not.
         unknown,
     },
-    /// Connections made to/from this port.
-    connections: std.ArrayList(Connection),
+    /// Connections made to this port.
+    connections: std.ArrayList(Endpoint),
 };
 
 const Context = struct {
@@ -189,7 +186,7 @@ fn handle_event(_ctx: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) 
             const accept = event.data.accept;
             print("accept on port {d}: new connection from client port {d} (pid={d})\n", .{
                 accept.listening.port,
-                accept.rport,
+                accept.peer_port,
                 accept.client_pid,
             });
 
@@ -198,9 +195,8 @@ fn handle_event(_ctx: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) 
                     port.number == accept.listening.port)
                 {
                     port.connections.append(ctx.allocator, .{
-                        .peer_port = accept.rport,
-                        .socket_cookie = accept.listening.cookie,
-                        .listen_cookie = accept.listening.cookie,
+                        .peer_port = accept.peer_port,
+                        .pid = accept.client_pid,
                     }) catch {};
                     print("port {d} has {d} connections\n", .{
                         port.number,

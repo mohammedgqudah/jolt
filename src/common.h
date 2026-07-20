@@ -20,10 +20,10 @@ struct jolt_event {
   uint32_t pid;
 
   union {
-    struct sock_evt socket;    /* used by BIND and RELEASE */
+    struct sock_evt socket; /* used by BIND and RELEASE */
     struct {
       struct sock_evt listening; /* the listening socket */
-      uint16_t rport;            /* remote port of the connecting client */
+      uint16_t peer_port;        /* local port of the connecting socket */
       uint32_t client_pid;       /* PID of the connecting client */
     } accept;                    /* a connection was accepted */
 
@@ -32,4 +32,12 @@ struct jolt_event {
       uint16_t rport;
     } connect; /* socket attempting to connect */
   } data;
+};
+
+
+/* uniquely identify an endpoint in the system */
+ __attribute__((packed)) struct endpoint_id  {
+  uint16_t port;
+  __be32 addr;
+  uint64_t ns_cookie;
 };

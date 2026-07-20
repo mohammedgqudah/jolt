@@ -33,9 +33,35 @@ struct {
 struct {
   __uint(type, BPF_MAP_TYPE_HASH);
   __uint(max_entries, 1024);
-  __type(key, u32);
-  __type(value, u32);
+  __type(key, struct endpoint_id);
+  __type(value, u32); /* pid */
 } connect_pid SEC(".maps");
+
+enum sk_endpoint_side { SK_LOCAL, SK_PEER };
+/* Get an identifier for an endpoint.
+ *
+ * @param[out]  conn_id   result is stored here.
+ * @param[in]   sk        sock.
+ * @param[in]   do_swap   whether to swap src and dest fields or not. Useful for
+ *                        getting the endpoint id of the peer endpoint
+ *                        (e.g. in accept(2)).
+ * */
+static __always_inline void sk_endpoint_id(struct endpoint_id *key, struct sock *sk, enum sk_endpoint_side side) {
+  struct net *net = BPF_CORE_READ(sk, __sk_common.skc_net.net);
+
+  __u16 src_port = BPF_CORE_READ(sk, __sk_common.skc_num);
+  __u16 dst_port = bpf_ntohs(BPF_CORE_READ(sk, __sk_common.skc_dport));
+  __be32 src_addr = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+  __be32 dst_addr = BPF_CORE_READ(sk, __sk_common.skc_daddr);
+  
+  int do_swap = side == SK_LOCAL ? 0 : 1;
+
+  *key = (struct endpoint_id){
+      .port = do_swap ? dst_port : src_port,
+      .addr = do_swap ? dst_addr : src_addr,
+      .ns_cookie = BPF_CORE_READ(net, net_cookie),
+  };
+}
 
 SEC("fexit/inet_bind")
 int BPF_PROG(inet_bind_exit, struct socket *sock, struct sockaddr *uaddr,
@@ -73,12 +99,15 @@ int BPF_PROG(inet_csk_accept_exit, struct sock *sk, int flags,
   struct net *net = BPF_CORE_READ(sk, __sk_common.skc_net.net);
 
   __u16 server_port = BPF_CORE_READ(sk, __sk_common.skc_num);
-  __u16 client_port =
-      bpf_ntohs(BPF_CORE_READ(child_sk, __sk_common.skc_dport));
 
   /* Look up the client PID that was stored by tcp_v4_connect. */
-  u32 map_key = ((u32)client_port << 16) | server_port;
+  struct endpoint_id map_key;
+  sk_endpoint_id(&map_key, child_sk, SK_PEER);
   u32 *client_pid = bpf_map_lookup_elem(&connect_pid, &map_key);
+
+  if (client_pid == NULL)
+    return 0; /* this connection didn't originate from this machine, ignore
+               */
 
   struct jolt_event event = {
       .pid = (u32)(bpf_get_current_pid_tgid() >> 32),
@@ -92,8 +121,8 @@ int BPF_PROG(inet_csk_accept_exit, struct sock *sk, int flags,
                           BPF_CORE_READ(sk, __sk_common.skc_cookie).counter,
                       .ns_cookie = BPF_CORE_READ(net, net_cookie),
                   },
-              .rport = client_port,
-              .client_pid = client_pid ? *client_pid : 0,
+              .peer_port = map_key.port,
+              .client_pid = *client_pid,
           },
   };
 
@@ -104,22 +133,21 @@ int BPF_PROG(inet_csk_accept_exit, struct sock *sk, int flags,
   return 0;
 }
 
+/*
+ * This only records the PID for the process starting the connection.
+ * */
 SEC("fexit/tcp_v4_connect")
 int BPF_PROG(tcp_v4_connect_exit, struct sock *sk, struct sockaddr *uaddr,
              int addr_len, int ret) {
   if (ret < 0)
-    return 0; 
+    return 0;
 
-  __u16 src_port = BPF_CORE_READ(sk, __sk_common.skc_num);
-  __u16 dst_port =
-      bpf_ntohs(BPF_CORE_READ(sk, __sk_common.skc_dport));
+  struct endpoint_id key;
+  sk_endpoint_id(&key, sk, SK_LOCAL);
 
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
 
-  // store pid in key(src_port, dst_port) so the accept probe can get client pid
-  // TODO: key should be a tuple of (addr, sport, dport, netns)
-  u32 key = ((u32)src_port << 16) | dst_port;
   bpf_map_update_elem(&connect_pid, &key, &pid, BPF_ANY);
   return 0;
 }

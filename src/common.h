@@ -34,10 +34,9 @@ struct jolt_event {
   } data;
 };
 
-
 /* uniquely identify an endpoint in the system */
- __attribute__((packed)) struct endpoint_id  {
+struct endpoint_id {
   uint16_t port;
   __be32 addr;
   uint64_t ns_cookie;
-};
+} __attribute__((packed));

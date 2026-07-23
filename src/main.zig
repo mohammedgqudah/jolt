@@ -125,7 +125,7 @@ pub fn main(init: std.process.Init) !void {
         .allocator = arena,
     };
 
-    var dummy: *bpf.Object(
+    var joltbpf: *bpf.Object(
         "prog.bpf.o",
         &.{
             "inet_bind_exit",
@@ -135,11 +135,11 @@ pub fn main(init: std.process.Init) !void {
         },
         &.{"events_buf"},
     ) = try .init(std.heap.c_allocator);
-    defer dummy.deinit(std.heap.c_allocator);
+    defer joltbpf.deinit(std.heap.c_allocator);
 
-    try dummy.attach();
+    try joltbpf.attach();
 
-    var rb: bpf.RingBuffer = try .init(dummy.maps.events_buf, handle_event, @ptrCast(&ctx));
+    var rb: bpf.RingBuffer = try .init(joltbpf.maps.events_buf, handle_event, @ptrCast(&ctx));
 
     print("waiting for ports\n", .{});
     while (running.load(.monotonic)) {
@@ -173,7 +173,10 @@ fn handle_event(_ctx: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) 
             for (ctx.ports) |*port| {
                 if (port.netns_cookie == socket.ns_cookie and port.number == socket.port) {
                     if (is_bind) {
-                        port.state = .{ .active = .{ .socket_cookie = socket.cookie, .pid = event.pid } };
+                        port.state = .{ .active = .{
+                            .socket_cookie = socket.cookie,
+                            .pid = event.pid,
+                        } };
                     } else {
                         port.state = .inactive;
                         port.connections.clearRetainingCapacity();
